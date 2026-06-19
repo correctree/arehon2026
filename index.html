@@ -199,11 +199,11 @@
   let THREE; // main()内でモジュール読み込み後にセットされる
 
   const TARGETS = [
-    { name: "mk_01", gif: "./assets/01.gif" },
-    { name: "mk_02", gif: "./assets/02.gif" },
-    { name: "mk_03", gif: "./assets/03.gif" },
+    { name: "mk_01", gif: "./01.gif" },
+    { name: "mk_02", gif: "./02.gif" },
+    { name: "mk_03", gif: "./03.gif" },
   ];
-  const MIND_FILE = "./assets/targets.mind";
+  const MIND_FILE = "./targets.mind";
 
   const statusBar = document.getElementById("status-bar");
   const statusText = document.getElementById("status-text");
@@ -221,7 +221,26 @@
   // --- GIFをデコードして、毎フレーム更新できるCanvasTextureを作る (omggif使用) ---
   async function createGifTexture(url) {
     const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(
+        `GIF取得に失敗(${url}): HTTP ${res.status} ${res.statusText}`
+      );
+    }
+    const contentType = res.headers.get("content-type") || "";
     const buffer = await res.arrayBuffer();
+
+    // 先頭6バイトが "GIF87a"/"GIF89a" になっているか確認(なっていなければ
+    // 別のファイル、HTMLの404ページ等が返ってきている可能性が高い)
+    const header = new Uint8Array(buffer.slice(0, 6));
+    const headerStr = String.fromCharCode(...header);
+    if (headerStr !== "GIF87a" && headerStr !== "GIF89a") {
+      throw new Error(
+        `${url} がGIFファイルとして取得できませんでした` +
+          ` (content-type: "${contentType}", 先頭バイト: "${headerStr}", サイズ: ${buffer.byteLength}バイト)。` +
+          ` パスが正しいか、サーバー側で正しく配信されているか確認してください。`
+      );
+    }
+
     const gr = new window.GifReader(new Uint8Array(buffer));
 
     const width = gr.width;
