@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>絵本AR テストページ</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  }
+
+  #ar-container {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  #ar-container video {
+    object-fit: cover;
+  }
+
+  /* ステータス表示 */
+  #status-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    padding: 12px 16px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.65), rgba(0,0,0,0));
+    color: #fff;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  #status-bar .badge {
+    background: rgba(255,255,255,0.15);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  #target-list {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    padding: 16px 12px calc(16px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,0.65), rgba(0,0,0,0));
+    pointer-events: none;
+  }
+
+  .target-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+    transition: background 0.2s, color 0.2s, transform 0.2s;
+  }
+
+  .target-chip.active {
+    background: #ffcc00;
+    color: #111;
+    transform: scale(1.06);
+    font-weight: 700;
+  }
+
+  .target-chip .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.5;
+  }
+
+  .target-chip.active .dot {
+    opacity: 1;
+  }
+
+  /* 起動前オーバーレイ */
+  #start-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: #111;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+  }
+
+  #start-overlay h1 {
+    font-size: 18px;
+    margin: 0 0 8px;
+    font-weight: 700;
+  }
+
+  #start-overlay p {
+    font-size: 13px;
+    color: rgba(255,255,255,0.6);
+    margin: 0 0 28px;
+    line-height: 1.6;
+    max-width: 280px;
+  }
+
+  #start-btn {
+    background: #ffcc00;
+    color: #111;
+    border: none;
+    border-radius: 999px;
+    padding: 14px 36px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  #start-btn:active {
+    transform: scale(0.97);
+  }
+
+  #loading-text {
+    margin-top: 16px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.4);
+  }
+
+  .hidden {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="start-overlay">
+  <h1>絵本AR テスト</h1>
+  <p>カメラを起動して、3枚のターゲット画像（mk_01〜mk_03）にかざしてください。<br>対応するGIFアニメーションが表示されます。</p>
+  <button id="start-btn">カメラを起動</button>
+  <div id="loading-text"></div>
+</div>
+
+<div id="status-bar" class="hidden">
+  <span id="status-text">カメラ起動中…</span>
+</div>
+
+<div id="target-list" class="hidden">
+  <div class="target-chip" data-index="0"><span class="dot"></span>mk_01</div>
+  <div class="target-chip" data-index="1"><span class="dot"></span>mk_02</div>
+  <div class="target-chip" data-index="2"><span class="dot"></span>mk_03</div>
+</div>
+
+<div id="ar-container"></div>
+
+<!-- three.js -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<!-- MindAR (three.js版) -->
+<script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
+<!-- omggif: 依存なしの軽量GIFデコーダ(GifReaderをグローバルに公開) -->
+<script src="https://cdn.jsdelivr.net/npm/omggif@1.0.10/omggif.js"></script>
+
+<script>
+(function () {
+  const TARGETS = [
+    { name: "mk_01", gif: "./assets/01.gif" },
+    { name: "mk_02", gif: "./assets/02.gif" },
+    { name: "mk_03", gif: "./assets/03.gif" },
+  ];
+  const MIND_FILE = "./assets/targets.mind";
+
+  const statusBar = document.getElementById("status-bar");
+  const statusText = document.getElementById("status-text");
+  const targetList = document.getElementById("target-list");
+  const startOverlay = document.getElementById("start-overlay");
+  const startBtn = document.getElementById("start-btn");
+  const loadingText = document.getElementById("loading-text");
+  const chips = Array.from(document.querySelectorAll(".target-chip"));
+
+  function setChipActive(index, active) {
+    const chip = chips.find((c) => Number(c.dataset.index) === index);
+    if (chip) chip.classList.toggle("active", active);
+  }
+
+  // --- GIFをデコードして、毎フレーム更新できるCanvasTextureを作る (omggif使用) ---
+  async function createGifTexture(url) {
+    const res = await fetch(url);
+    const buffer = await res.arrayBuffer();
+    const gr = new window.GifReader(new Uint8Array(buffer));
+
+    const width = gr.width;
+    const height = gr.height;
+    const numFrames = gr.numFrames();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.flipY = true;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    // 全フレームを事前デコードしてImageDataとして保持(再生時の負荷を抑える)
+    // disposalType 2(背景に戻す)以外は前フレームの上に重ね書きするのが仕様のため、
+    // 1本のRGBAバッファを使い回して各フレームをblitする。
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    const decodedFrames = [];
+    for (let i = 0; i < numFrames; i++) {
+      const info = gr.frameInfo(i);
+      if (info.disposal === 2) {
+        rgba.fill(0); // 背景(透明)に戻す
+      }
+      gr.decodeAndBlitFrameRGBA(i, rgba);
+      decodedFrames.push({
+        imageData: new ImageData(new Uint8ClampedArray(rgba), width, height),
+        delay: Math.max((info.delay || 10) * 10, 20), // 1/100秒 → ms (最低20ms)
+      });
+    }
+
+    function drawFrame(i) {
+      ctx.putImageData(decodedFrames[i].imageData, 0, 0);
+      texture.needsUpdate = true;
+    }
+
+    drawFrame(0); // 初期フレーム
+
+    let frameIndex = 0;
+    let elapsed = 0;
+    let lastTime = null;
+
+    function update(timeMs) {
+      if (lastTime === null) lastTime = timeMs;
+      const delta = timeMs - lastTime;
+      lastTime = timeMs;
+      elapsed += delta;
+
+      if (elapsed >= decodedFrames[frameIndex].delay) {
+        elapsed = 0;
+        frameIndex = (frameIndex + 1) % numFrames;
+        drawFrame(frameIndex);
+      }
+    }
+
+    return { texture, update, aspect: width / height };
+  }
+
+  async function main() {
+    loadingText.textContent = "アセットを読み込み中…";
+
+    const mindarThree = new window.MINDAR.IMAGE.MindARThree({
+      container: document.querySelector("#ar-container"),
+      imageTargetSrc: MIND_FILE,
+      uiScanning: false,
+      uiLoading: false,
+    });
+
+    const { renderer, scene, camera } = mindarThree;
+
+    // 各ターゲットのGIFテクスチャを準備
+    const gifControllers = [];
+    for (let i = 0; i < TARGETS.length; i++) {
+      const { texture, update, aspect } = await createGifTexture(TARGETS[i].gif);
+      const anchor = mindarThree.addAnchor(i);
+
+      const planeHeight = 1;
+      const planeWidth = planeHeight * aspect;
+      const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        side: THREE.DoubleSide,
+      });
+      const plane = new THREE.Mesh(geometry, material);
+      anchor.group.add(plane);
+
+      anchor.onTargetFound = () => {
+        statusText.textContent = `${TARGETS[i].name} を認識中`;
+        setChipActive(i, true);
+      };
+      anchor.onTargetLost = () => {
+        setChipActive(i, false);
+        statusText.textContent = "ページを探しています…";
+      };
+
+      gifControllers.push(update);
+    }
+
+    await mindarThree.start();
+
+    statusBar.classList.remove("hidden");
+    targetList.classList.remove("hidden");
+    statusText.textContent = "ページを探しています…";
+
+    renderer.setAnimationLoop((timeMs) => {
+      gifControllers.forEach((update) => update(timeMs));
+      renderer.render(scene, camera);
+    });
+  }
+
+  startBtn.addEventListener("click", async () => {
+    startBtn.disabled = true;
+    startBtn.textContent = "起動中…";
+    try {
+      await main();
+      startOverlay.classList.add("hidden");
+    } catch (err) {
+      console.error(err);
+      loadingText.textContent =
+        "エラーが発生しました: " + (err && err.message ? err.message : err);
+      startBtn.disabled = false;
+      startBtn.textContent = "もう一度試す";
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
