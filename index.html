@@ -198,10 +198,13 @@
 
   let THREE; // main()内でモジュール読み込み後にセットされる
 
+  // pose: 各GIFの配置を調整するパラメータ
+  //   rotationX: ページ面に対する傾き(0=寝かせる/デフォルト, -Math.PI/2=垂直に立てる)
+  //   anchorY:   立てた時に底辺をページ面に合わせるための上方向オフセット(通常は planeHeight/2 を使う、後で自動計算)
   const TARGETS = [
-    { name: "mk_01", gif: "./01.gif" },
-    { name: "mk_02", gif: "./02.gif" },
-    { name: "mk_03", gif: "./03.gif" },
+    { name: "mk_01", gif: "./01.gif", pose: { rotationX: 0 } },
+    { name: "mk_02", gif: "./02.gif", pose: { rotationX: -Math.PI / 2, standing: true } },
+    { name: "mk_03", gif: "./03.gif", pose: { rotationX: 0 } },
   ];
   const MIND_FILE = "./targets.mind";
 
@@ -316,9 +319,25 @@
       imageTargetSrc: MIND_FILE,
       uiScanning: false,
       uiLoading: false,
+      // MindARはデフォルトで同時トラッキング数が1に制限されている。
+      // 複数ページを同時に認識・表示したい場合はターゲット数に合わせて増やす。
+      maxTrack: TARGETS.length,
     });
 
     const { renderer, scene, camera } = mindarThree;
+
+    // 複数ターゲットが同時に認識された場合も状況が分かるようにする
+    const activeTargets = new Set();
+    function updateStatusText() {
+      if (activeTargets.size === 0) {
+        statusText.textContent = "ページを探しています…";
+      } else {
+        const names = Array.from(activeTargets)
+          .sort((a, b) => a - b)
+          .map((idx) => TARGETS[idx].name);
+        statusText.textContent = `${names.join(" + ")} を認識中`;
+      }
+    }
 
     // 各ターゲットのGIFテクスチャを準備
     const gifControllers = [];
@@ -335,15 +354,26 @@
         side: THREE.DoubleSide,
       });
       const plane = new THREE.Mesh(geometry, material);
+
+      // pose設定に応じてPlaneを回転・配置する
+      // (デフォルトはページに対して平行=寝かせた状態。rotationXを付けると起こせる)
+      const pose = TARGETS[i].pose || {};
+      plane.rotation.x = pose.rotationX || 0;
+      if (pose.standing) {
+        // 垂直に立てた場合、底辺がページ面(アンカー原点)に来るよう持ち上げる
+        plane.position.y = planeHeight / 2;
+      }
       anchor.group.add(plane);
 
       anchor.onTargetFound = () => {
-        statusText.textContent = `${TARGETS[i].name} を認識中`;
+        activeTargets.add(i);
+        updateStatusText();
         setChipActive(i, true);
       };
       anchor.onTargetLost = () => {
+        activeTargets.delete(i);
+        updateStatusText();
         setChipActive(i, false);
-        statusText.textContent = "ページを探しています…";
       };
 
       gifControllers.push(update);
